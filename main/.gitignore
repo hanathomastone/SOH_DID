@@ -1,0 +1,13 @@
+recipt.json
+test.py
+ttt
+test_run.py
+sample_token_response.json
+retrieve.json
+recipt.json
+__pycache__/
+*.pyc
+.env
+*.db
+*.pem
+instance/
