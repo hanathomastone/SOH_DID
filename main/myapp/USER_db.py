@@ -17,6 +17,15 @@ ALLOWED_TOKEN_COLUMNS = {
 }
 
 
+def normalize_token_column(token_name):
+    if not isinstance(token_name, str):
+        raise ValueError(f'Unsupported token column: {token_name}')
+    normalized = token_name.strip().replace('-', '_').replace(' ', '_').upper()
+    if normalized not in ALLOWED_TOKEN_COLUMNS:
+        raise ValueError(f'Unsupported token column: {token_name}')
+    return normalized
+
+
 class User(MySQLStore):
     def add_user(self, DID, user_identifier=None):
         self.cursor.execute(
@@ -44,6 +53,18 @@ class User(MySQLStore):
         )
         print('user added ', DID)
 
+    def update_user_identifier(self, DID, user_identifier):
+        if not DID or not user_identifier:
+            return
+        self.cursor.execute(
+            """
+            UPDATE `user`
+            SET user_identifier = %s
+            WHERE DID = %s
+            """,
+            (user_identifier, DID),
+        )
+
     def update_credential(self, DID, jwt, valid_from=None, valid_until=None, status='ISSUED'):
         self.cursor.execute(
             """
@@ -51,26 +72,34 @@ class User(MySQLStore):
             SET credential_jwt = %s,
                 credential_status = %s,
                 credential_valid_from = %s,
-                credential_valid_until = %s
+                credential_valid_until = %s,
+                daegu_credential_jwt = %s,
+                daegu_credential_status = %s,
+                daegu_credential_valid_from = %s,
+                daegu_credential_valid_until = %s
             WHERE DID = %s
             """,
-            (jwt, status, valid_from, valid_until, DID),
+            (jwt, status, valid_from, valid_until, jwt, status, valid_from, valid_until, DID),
         )
 
     def mark_credential_failed(self, DID):
         self.cursor.execute(
-            "UPDATE `user` SET credential_status = %s WHERE DID = %s",
-            ('FAILED', DID),
+            """
+            UPDATE `user`
+            SET credential_status = %s,
+                daegu_credential_status = %s
+            WHERE DID = %s
+            """,
+            ('FAILED', 'FAILED', DID),
         )
 
     def increase_balance(self, DID, token_name):
-        if token_name not in ALLOWED_TOKEN_COLUMNS:
-            raise ValueError(f'Unsupported token column: {token_name}')
+        token_name = normalize_token_column(token_name)
         self.cursor.execute(
             f"UPDATE `user` SET `{token_name}` = 1 WHERE DID = %s",
             (DID,),
         )
-        return self.cursor.fetchall()
+        return token_name, self.cursor.rowcount
 
     def remove(self, DID):
         self.cursor.execute("DELETE FROM `user` WHERE DID = %s", (DID,))

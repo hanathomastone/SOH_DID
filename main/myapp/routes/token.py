@@ -31,19 +31,43 @@ def _with_owner(payload):
 
 
 def _contract_from_create_response(body):
-    contract = ((body.get('data') or {}).get('contract') or {})
+    data = body.get('data') or {}
+    contract = data.get('contract') or {}
     contract_data = contract.get('data') or {}
-    return contract_data.get('address') or contract.get('address')
+    token = data.get('token') or {}
+    token_response = token.get('response') or {}
+    token_fact = token_response.get('fact') or {}
+    token_receipt = token.get('receipt') or {}
+    receipt_operation = token_receipt.get('operation') or {}
+    receipt_fact = receipt_operation.get('fact') or {}
+    return (
+        contract_data.get('address')
+        or contract.get('address')
+        or token_fact.get('contract')
+        or receipt_fact.get('contract')
+    )
+
+
+def _issued_from_create_response(body):
+    data = body.get('data') or {}
+    contract = data.get('contract') or {}
+    token = data.get('token') or {}
+    return token.get('issued') or contract.get('issued')
 
 
 @token_api.route('/create', methods=['POST'])
 def create_token():
     payload = _with_owner(request_json())
+    if payload.get('token_name'):
+        try:
+            payload['token_name'] = USER_db.normalize_token_column(payload['token_name'])
+        except ValueError:
+            pass
     payload.setdefault('decimals', 9)
     status_code, body = post_dchain(TOKEN_ENDPOINTS['create'], payload)
     if status_code == 200 and body.get('state') == 'OK':
         contract_addr = _contract_from_create_response(body)
-        issued = ((body.get('data') or {}).get('contract') or {}).get('issued')
+        issued = _issued_from_create_response(body)
         if contract_addr:
             token_db.add_token(
                 token_name=payload.get('token_name'),
@@ -54,12 +78,23 @@ def create_token():
                 meta_data=json.dumps(body, ensure_ascii=False),
             )
             token_db.commit()
+            body.setdefault('local_db', {})['saved'] = True
+            body['local_db']['token_name'] = payload.get('token_name')
+            body['local_db']['contract_addr'] = contract_addr
+        else:
+            body.setdefault('local_db', {})['saved'] = False
+            body['local_db']['reason'] = 'contract address not found in create response'
     return jsonify(body), status_code
 
 
 @token_api.route('/transfer', methods=['POST'])
 def transfer():
     payload = request_json()
+    if 'token_name' in payload:
+        try:
+            payload['token_name'] = USER_db.normalize_token_column(payload['token_name'])
+        except ValueError as exc:
+            return jsonify({'state': 'ERROR', 'msg': str(exc)}), 400
     if 'user_DID' in payload:
         did_rows = get_did_info_db.get_DID_info_by_did(payload['user_DID'])
         if not did_rows:
@@ -70,12 +105,24 @@ def transfer():
         token_rows = get_token_info.get_addr_by_name(payload['token_name'])
         if token_rows:
             payload['cont_addr'] = token_rows[0][0]
+        else:
+            return jsonify({
+                'state': 'ERROR',
+                'msg': f"token contract not found: {payload['token_name']}",
+            }), 400
     payload.setdefault('sender', OWNER_ADDR)
     payload.setdefault('sender_pkey', OWNER_PRIVATE)
     status_code, body = post_dchain(TOKEN_ENDPOINTS['transfer'], payload)
     if status_code == 200 and body.get('state') == 'OK' and payload.get('user_DID') and payload.get('token_name'):
-        user_db.increase_balance(payload['user_DID'], payload['token_name'])
+        try:
+            updated_column, updated_rows = user_db.increase_balance(payload['user_DID'], payload['token_name'])
+        except ValueError as exc:
+            return jsonify({'state': 'ERROR', 'msg': str(exc)}), 400
         user_db.commit()
+        body.setdefault('local_db', {})['user_token_updated'] = True
+        body['local_db']['user_DID'] = payload['user_DID']
+        body['local_db']['token_column'] = updated_column
+        body['local_db']['updated_rows'] = updated_rows
     return jsonify(body), status_code
 
 

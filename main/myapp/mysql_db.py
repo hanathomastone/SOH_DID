@@ -61,6 +61,10 @@ def ensure_tables():
             ensure_column(cursor, 'user', 'credential_status', 'VARCHAR(20) NULL')
             ensure_column(cursor, 'user', 'credential_valid_from', 'DATE NULL')
             ensure_column(cursor, 'user', 'credential_valid_until', 'DATE NULL')
+            ensure_column(cursor, 'user', 'daegu_credential_jwt', 'TEXT NULL')
+            ensure_column(cursor, 'user', 'daegu_credential_status', 'VARCHAR(20) NULL')
+            ensure_column(cursor, 'user', 'daegu_credential_valid_from', 'DATE NULL')
+            ensure_column(cursor, 'user', 'daegu_credential_valid_until', 'DATE NULL')
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS Token (

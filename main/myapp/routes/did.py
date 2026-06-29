@@ -93,6 +93,8 @@ def _store_credential(did, jwt, payload):
     if not did or not jwt:
         return
     try:
+        user_identifier = _resolve_user_identifier(payload)
+        user_db.update_user_identifier(did, user_identifier)
         user_db.update_credential(
             did,
             jwt,
@@ -102,6 +104,17 @@ def _store_credential(did, jwt, payload):
         user_db.commit()
     except Exception:
         logging.exception('Local DID credential cache update failed. did=%s', did)
+
+
+def _attach_credential_response(data, credential_jwt, credential_payload, credential_data=None):
+    data['credentialJwt'] = credential_jwt
+    data['daeguCredentialJwt'] = credential_jwt
+    data['credentialValidFrom'] = credential_payload.get('validfrom')
+    data['credentialValidUntil'] = credential_payload.get('validuntil')
+    data['daeguCredentialValidFrom'] = credential_payload.get('validfrom')
+    data['daeguCredentialValidUntil'] = credential_payload.get('validuntil')
+    if credential_data is not None:
+        data['credential'] = credential_data
 
 
 def _decode_jwt_payload(jwt):
@@ -198,8 +211,12 @@ def create_did():
                 credential_jwt = _extract_credential_jwt(credential_body)
                 if credential_status == 200 and credential_body.get('state') == 'OK' and credential_jwt:
                     _store_credential(account['did'], credential_jwt, credential_payload)
-                    body.setdefault('data', {})['credentialJwt'] = credential_jwt
-                    body['data']['credential'] = credential_body.get('data')
+                    _attach_credential_response(
+                        body.setdefault('data', {}),
+                        credential_jwt,
+                        credential_payload,
+                        credential_body.get('data'),
+                    )
                 else:
                     user_db.mark_credential_failed(account['did'])
                     user_db.commit()
@@ -264,7 +281,7 @@ def issue_credential():
         credential_jwt = _extract_credential_jwt(body)
         if credential_jwt:
             _store_credential(payload.get('did'), credential_jwt, payload)
-            body.setdefault('data', {})['credentialJwt'] = credential_jwt
+            _attach_credential_response(body.setdefault('data', {}), credential_jwt, payload)
         return jsonify(body), status_code
 
     if _credential_already_issued(body):
