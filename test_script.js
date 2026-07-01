@@ -8,6 +8,7 @@ const videos = [
 const player = document.getElementById('videoPlayer');
 const source = document.getElementById('videoSource');
 const playlistContainer = document.getElementById('playlist');
+const apiResult = document.getElementById('apiResult');
 
 const BASE_URI = "http://127.0.0.1:5000"
 
@@ -45,6 +46,22 @@ function initPlaylist() {
 // 초기화 실행
 initPlaylist();
 
+function showResult(title, data) {
+    apiResult.textContent = `${title}\n${JSON.stringify(data, null, 2)}`;
+}
+
+async function readResponseJson(response) {
+    try {
+        return await response.json();
+    } catch (error) {
+        return {
+            state: 'ERROR',
+            msg: '서버 응답을 JSON으로 읽지 못했습니다.',
+            status: response.status
+        };
+    }
+}
+
 // 공통 요청 함수
 async function sendPostRequest(url, data, successMessage, method) {
     try {
@@ -55,17 +72,27 @@ async function sendPostRequest(url, data, successMessage, method) {
             },
             body: JSON.stringify(data)
         });
+        const result = await readResponseJson(response);
 
         if (response.ok) {
-            const result = await response.json();
             alert(`${successMessage} 성공!`);
             console.log('서버 응답:', result);
+            showResult(`${successMessage} 성공`, result);
+            return result;
         } else {
-            alert(`${successMessage} 실패 (에러 코드: ${response.status})`);
+            const message = result.msg || result.message || `에러 코드: ${response.status}`;
+            alert(`${successMessage} 실패 (${message})`);
+            console.error('서버 응답:', result);
+            showResult(`${successMessage} 실패`, result);
+            return null;
         }
     } catch (error) {
         console.error('에러 발생:', error);
+        showResult(`${successMessage} 요청 오류`, {
+            message: error.message
+        });
         alert(`${successMessage} 중 오류가 발생했습니다. (콘솔 확인)`);
+        return null;
     }
 }
 
@@ -95,8 +122,27 @@ document.getElementById('didBtn').addEventListener('click', () => {
 });
 
 // 3. 생성된 DID 목록과 DID에 지급된 토큰 개수 출력
-document.getElementById('didListBtn').addEventListener('click', () => {
-    const reqUri = BASE_URI + "/did/dids"; 
-    const response = fetch(reqUri);
+document.getElementById('didListBtn').addEventListener('click', async () => {
+    const reqUri = BASE_URI + "/did/dids";
+
+    try {
+        const response = await fetch(reqUri);
+        const result = await readResponseJson(response);
+
+        if (response.ok) {
+            console.log('DID 목록:', result);
+            showResult('DID 목록', result);
+        } else {
+            console.error('DID 목록 조회 실패:', result);
+            showResult('DID 목록 조회 실패', result);
+            alert(`DID 목록 조회 실패 (에러 코드: ${response.status})`);
+        }
+    } catch (error) {
+        console.error('에러 발생:', error);
+        showResult('DID 목록 요청 오류', {
+            message: error.message
+        });
+        alert('DID 목록 조회 중 오류가 발생했습니다. (콘솔 확인)');
+    }
 });
 

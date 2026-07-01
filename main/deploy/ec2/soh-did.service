@@ -1,0 +1,15 @@
+[Unit]
+Description=SOH DID Flask API
+After=network.target
+
+[Service]
+User=ubuntu
+Group=www-data
+WorkingDirectory=/opt/soh-did/current
+EnvironmentFile=/etc/soh-did/soh-did.env
+ExecStart=/opt/soh-did/venv/bin/gunicorn --workers 2 --threads 4 --timeout 60 --bind 127.0.0.1:5000 run:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

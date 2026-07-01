@@ -7,6 +7,12 @@ from .routes.did import did_api
 from .routes.common import common_api
 
 
+def _default_log_dir():
+    if os.getenv('AWS_LAMBDA_FUNCTION_NAME'):
+        return '/tmp/logs'
+    return 'logs'
+
+
 class MitumPrefixMiddleware:
     def __init__(self, app):
         self.app = app
@@ -25,13 +31,12 @@ def create_app():
     # -------------------------
     # 로그 설정
     # -------------------------
-    # logs 디렉토리가 없으면 생성
-    if not os.path.exists("logs"):
-        os.mkdir("logs")
+    log_dir = os.getenv('APP_LOG_DIR', _default_log_dir())
+    os.makedirs(log_dir, exist_ok=True)
 
     # 파일 로테이션 핸들러
     file_handler = RotatingFileHandler(
-        'logs/app.log',
+        os.path.join(log_dir, 'app.log'),
         maxBytes=1_000_000,        # 1MB 넘으면 rotate
         backupCount=10,            # app.log.1 ~ app.log.10 보관
         encoding='utf-8'

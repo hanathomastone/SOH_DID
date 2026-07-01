@@ -121,6 +121,22 @@
         #didListBtn:hover {
             background-color: #218838;
         }
+
+        #apiResult {
+            width: 100%;
+            max-width: 640px;
+            min-height: 120px;
+            margin: 20px 0 0;
+            padding: 12px;
+            box-sizing: border-box;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            background: white;
+            color: #212529;
+            font-size: 13px;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
     </style>
 </head>
 <body>
@@ -141,6 +157,7 @@
             <button id="didBtn">DID 생성</button>
             <button id="didListBtn">DID 전부 출력</button>
         </div>
+        <pre id="apiResult" aria-live="polite"></pre>
     </div>
 </div>
 
