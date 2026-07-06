@@ -3,6 +3,7 @@ from myapp.mysql_db import MySQLStore
 
 class DID(MySQLStore):
     def add_did(self, did, prikey, pubkey, address):
+        self.reconnect()
         self.cursor.execute(
             """
             INSERT INTO DID (DID, private_key, public_key, account_address)
@@ -17,4 +18,5 @@ class DID(MySQLStore):
         print('did added ', did)
 
     def remove(self, did):
+        self.reconnect()
         self.cursor.execute("DELETE FROM DID WHERE DID = %s", (did,))

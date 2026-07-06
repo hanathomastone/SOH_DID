@@ -28,6 +28,7 @@ def normalize_token_column(token_name):
 
 class User(MySQLStore):
     def add_user(self, DID, user_identifier=None):
+        self.reconnect()
         self.cursor.execute(
             """
             INSERT IGNORE INTO `user` (
@@ -56,6 +57,7 @@ class User(MySQLStore):
     def update_user_identifier(self, DID, user_identifier):
         if not DID or not user_identifier:
             return
+        self.reconnect()
         self.cursor.execute(
             """
             UPDATE `user`
@@ -66,6 +68,7 @@ class User(MySQLStore):
         )
 
     def update_credential(self, DID, jwt, valid_from=None, valid_until=None, status='ISSUED'):
+        self.reconnect()
         self.cursor.execute(
             """
             UPDATE `user`
@@ -83,6 +86,7 @@ class User(MySQLStore):
         )
 
     def mark_credential_failed(self, DID):
+        self.reconnect()
         self.cursor.execute(
             """
             UPDATE `user`
@@ -95,6 +99,7 @@ class User(MySQLStore):
 
     def increase_balance(self, DID, token_name):
         token_name = normalize_token_column(token_name)
+        self.reconnect()
         self.cursor.execute(
             f"UPDATE `user` SET `{token_name}` = 1 WHERE DID = %s",
             (DID,),
@@ -102,4 +107,5 @@ class User(MySQLStore):
         return token_name, self.cursor.rowcount
 
     def remove(self, DID):
+        self.reconnect()
         self.cursor.execute("DELETE FROM `user` WHERE DID = %s", (DID,))

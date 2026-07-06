@@ -3,6 +3,7 @@ from myapp.mysql_db import MySQLStore
 
 class Token(MySQLStore):
     def add_token(self, token_name, contract_addr, issued, supply, token_symbol=None, meta_data=None):
+        self.reconnect()
         self.cursor.execute(
             """
             INSERT INTO Token

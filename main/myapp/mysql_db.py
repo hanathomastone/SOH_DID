@@ -105,6 +105,21 @@ class MySQLStore:
         self.conn = connect()
         self.cursor = self.conn.cursor()
 
+    def reconnect(self):
+        try:
+            self.conn.ping(reconnect=True)
+        except Exception:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = connect()
+        try:
+            self.cursor.close()
+        except Exception:
+            pass
+        self.cursor = self.conn.cursor()
+
     def close(self):
         self.conn.commit()
         self.cursor.close()
