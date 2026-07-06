@@ -1,7 +1,7 @@
 import os
 import logging
 from logging.handlers import RotatingFileHandler
-from flask import Flask
+from flask import Flask, jsonify
 from .routes.token import token_api
 from .routes.did import did_api
 from .routes.common import common_api
@@ -59,5 +59,15 @@ def create_app():
     app.register_blueprint(token_api, url_prefix='/token')
     app.register_blueprint(did_api, url_prefix='/did')
     app.register_blueprint(common_api, url_prefix='/common')
+
+    @app.errorhandler(Exception)
+    def handle_unexpected_error(error):
+        app.logger.exception('Unhandled application error')
+        return jsonify({
+            'state': 'ERROR',
+            'msg': 'internal server error',
+            'error': str(error),
+        }), 500
+
     app.wsgi_app = MitumPrefixMiddleware(app.wsgi_app)
     return app

@@ -189,15 +189,22 @@ def create_did():
     if status_code == 200 and body.get('state') == 'OK':
         account = _extract_account(body.get('data') or {})
         if all(account.values()):
-            did_db.add_did(
-                account['did'],
-                account['private_key'],
-                account['public_key'],
-                account['address'],
-            )
-            did_db.commit()
-            user_db.add_user(account['did'], user_identifier)
-            user_db.commit()
+            try:
+                did_db.add_did(
+                    account['did'],
+                    account['private_key'],
+                    account['public_key'],
+                    account['address'],
+                )
+                did_db.commit()
+                user_db.add_user(account['did'], user_identifier)
+                user_db.commit()
+                body.setdefault('local_db', {})['saved'] = True
+                body['local_db']['userIdentifier'] = user_identifier
+            except Exception as exc:
+                logging.exception('Local DID cache update failed. did=%s', account['did'])
+                body.setdefault('local_db', {})['saved'] = False
+                body['local_db']['error'] = str(exc)
             if user_identifier:
                 credential_payload = _build_login_credential_payload(
                     account['did'],
@@ -218,8 +225,11 @@ def create_did():
                         credential_body.get('data'),
                     )
                 else:
-                    user_db.mark_credential_failed(account['did'])
-                    user_db.commit()
+                    try:
+                        user_db.mark_credential_failed(account['did'])
+                        user_db.commit()
+                    except Exception:
+                        logging.exception('Local DID credential failure status update failed. did=%s', account['did'])
                     body.setdefault('data', {})['credentialError'] = {
                         'status_code': credential_status,
                         'state': credential_body.get('state'),
