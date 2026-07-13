@@ -1,6 +1,10 @@
 import base64
+from datetime import datetime, timezone
 import json
 import logging
+from pathlib import Path
+import stat
+import threading
 
 from flask import Blueprint, jsonify, request
 import os
@@ -8,6 +12,7 @@ import sys
 
 from myapp.dchain import post_dchain, proxy_response, request_json
 from myapp.utils import (
+    COMMON_ENDPOINTS,
     DID_ENDPOINTS,
     LOGIN_CREDENTIAL_TEMPLATE_ID,
     LOGIN_CREDENTIAL_VALID_FROM,
@@ -27,6 +32,173 @@ user_db = USER_db.User()
 get_user_info_db = USER_db_get.get_User_Info()
 did_db = DID_db.DID()
 get_did_info_db = DID_db_get.get_DID_Info()
+
+DATA_DIR = Path(os.getenv('DID_DATA_DIR', './data'))
+DIDS_DIR = DATA_DIR / 'dids'
+KEYS_DIR = DATA_DIR / 'keys'
+INDEX_PATH = DATA_DIR / 'index.json'
+
+for directory in (DIDS_DIR, KEYS_DIR):
+    directory.mkdir(parents=True, exist_ok=True)
+
+_index_lock = threading.Lock()
+_ED25519_PUB_CODEC_PREFIX = bytes([0xED, 0x01])
+_BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+
+
+def _base58_encode(raw):
+    number = int.from_bytes(raw, 'big')
+    encoded = ''
+    while number:
+        number, remainder = divmod(number, 58)
+        encoded = _BASE58_ALPHABET[remainder] + encoded
+    padding = 0
+    for byte in raw:
+        if byte == 0:
+            padding += 1
+        else:
+            break
+    return ('1' * padding) + (encoded or '1')
+
+
+def _to_base58btc(raw):
+    return 'z' + _base58_encode(raw)
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _chmod_600(path):
+    try:
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except Exception:
+        pass
+
+
+def _read_index():
+    if not INDEX_PATH.exists():
+        return {}
+    with INDEX_PATH.open('r', encoding='utf-8') as file:
+        return json.load(file)
+
+
+def _write_index(index):
+    tmp_path = INDEX_PATH.with_suffix('.tmp')
+    with tmp_path.open('w', encoding='utf-8') as file:
+        json.dump(index, file, ensure_ascii=False, indent=2)
+    tmp_path.replace(INDEX_PATH)
+
+
+def _make_did_key_and_doc(label=None):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key()
+    private_bytes = private_key.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+
+    fingerprint = _to_base58btc(_ED25519_PUB_CODEC_PREFIX + public_bytes)
+    did = f'did:key:{fingerprint}'
+    verification_method_id = f'{did}#{fingerprint}'
+    did_document = {
+        '@context': [
+            'https://www.w3.org/ns/did/v1',
+            'https://w3id.org/security/multikey/v1',
+        ],
+        'id': did,
+        'verificationMethod': [
+            {
+                'id': verification_method_id,
+                'type': 'Multikey',
+                'controller': did,
+                'publicKeyMultibase': _to_base58btc(public_bytes),
+            }
+        ],
+        'authentication': [verification_method_id],
+        'assertionMethod': [verification_method_id],
+        'capabilityInvocation': [verification_method_id],
+        'capabilityDelegation': [verification_method_id],
+        'keyAgreement': [],
+    }
+    private_export = {
+        'kty': 'OKP',
+        'crv': 'Ed25519',
+        'd': private_bytes.hex(),
+        'x': public_bytes.hex(),
+        'alg': 'EdDSA',
+    }
+    meta = {
+        'did': did,
+        'fingerprint': fingerprint,
+        'label': label,
+        'created_at': _now_iso(),
+    }
+    return did, fingerprint, did_document, private_export, meta
+
+
+def _persist_local_did(fingerprint, did_document, private_export, meta, wallet_account=None):
+    did_path = DIDS_DIR / f'{fingerprint}.did.json'
+    key_path = KEYS_DIR / f'{fingerprint}.key.json'
+    stored_private_export = dict(private_export)
+    if wallet_account:
+        stored_private_export['wallet'] = wallet_account
+
+    with did_path.open('w', encoding='utf-8') as file:
+        json.dump(did_document, file, ensure_ascii=False, indent=2)
+    with key_path.open('w', encoding='utf-8') as file:
+        json.dump(stored_private_export, file, ensure_ascii=False, indent=2)
+    _chmod_600(key_path)
+
+    with _index_lock:
+        index = _read_index()
+        index[meta['did']] = {key: meta[key] for key in ('created_at', 'label', 'fingerprint')}
+        if wallet_account:
+            index[meta['did']]['account_address'] = wallet_account.get('address')
+        _write_index(index)
+
+    return str(did_path), str(key_path)
+
+
+def _extract_wallet_account(body):
+    data = body.get('data') or {}
+    key_pair = data.get('key_pair') or {}
+    return {
+        'address': key_pair.get('address'),
+        'privatekey': key_pair.get('privatekey') or key_pair.get('private_key'),
+        'publickey': key_pair.get('publickey') or key_pair.get('public_key'),
+    }
+
+
+def _create_wallet_account():
+    status_code, body = post_dchain(COMMON_ENDPOINTS['acc_create'], {})
+    if status_code != 200 or body.get('state') != 'OK':
+        return None, {
+            'status_code': status_code,
+            'state': body.get('state'),
+            'msg': body.get('msg'),
+            'rcode': body.get('rcode'),
+            'cid': body.get('cid'),
+        }
+
+    wallet_account = _extract_wallet_account(body)
+    if not wallet_account.get('address'):
+        return None, {
+            'status_code': status_code,
+            'state': body.get('state'),
+            'msg': 'wallet address not found in acc_create response',
+            'response': body,
+        }
+
+    return wallet_account, None
 
 
 def _extract_account(data):
@@ -185,59 +357,70 @@ def _disclose_existing_credential(payload):
 def create_did():
     payload = request_json()
     user_identifier = _resolve_user_identifier(payload)
-    status_code, body = post_dchain(DID_ENDPOINTS['create_account'], payload)
-    if status_code == 200 and body.get('state') == 'OK':
-        account = _extract_account(body.get('data') or {})
-        if all(account.values()):
-            try:
-                did_db.add_did(
-                    account['did'],
-                    account['private_key'],
-                    account['public_key'],
-                    account['address'],
-                )
-                did_db.commit()
-                user_db.add_user(account['did'], user_identifier)
-                user_db.commit()
-                body.setdefault('local_db', {})['saved'] = True
-                body['local_db']['userIdentifier'] = user_identifier
-            except Exception as exc:
-                logging.exception('Local DID cache update failed. did=%s', account['did'])
-                body.setdefault('local_db', {})['saved'] = False
-                body['local_db']['error'] = str(exc)
-            if user_identifier:
-                credential_payload = _build_login_credential_payload(
-                    account['did'],
-                    user_identifier,
-                    payload,
-                )
-                credential_status, credential_body = post_dchain(
-                    DID_ENDPOINTS['issue'],
-                    credential_payload,
-                )
-                credential_jwt = _extract_credential_jwt(credential_body)
-                if credential_status == 200 and credential_body.get('state') == 'OK' and credential_jwt:
-                    _store_credential(account['did'], credential_jwt, credential_payload)
-                    _attach_credential_response(
-                        body.setdefault('data', {}),
-                        credential_jwt,
-                        credential_payload,
-                        credential_body.get('data'),
-                    )
-                else:
-                    try:
-                        user_db.mark_credential_failed(account['did'])
-                        user_db.commit()
-                    except Exception:
-                        logging.exception('Local DID credential failure status update failed. did=%s', account['did'])
-                    body.setdefault('data', {})['credentialError'] = {
-                        'status_code': credential_status,
-                        'state': credential_body.get('state'),
-                        'msg': credential_body.get('msg'),
-                        'rcode': credential_body.get('rcode'),
-                        'cid': credential_body.get('cid'),
-                    }
-    return jsonify(body), status_code
+    label = payload.get('label') or user_identifier
+
+    try:
+        did, fingerprint, did_document, private_export, meta = _make_did_key_and_doc(label)
+    except Exception as exc:
+        logging.exception('Local DID generation failed.')
+        return jsonify({'state': 'ERROR', 'msg': str(exc)}), 500
+
+    wallet_account, wallet_error = _create_wallet_account()
+    if wallet_error:
+        logging.error('Wallet account generation failed. did=%s error=%s', did, wallet_error)
+        return jsonify({
+            'state': 'ERROR',
+            'msg': 'wallet account generation failed',
+            'walletError': wallet_error,
+        }), 502
+
+    try:
+        did_path, key_path = _persist_local_did(
+            fingerprint,
+            did_document,
+            private_export,
+            meta,
+            wallet_account,
+        )
+    except Exception as exc:
+        logging.exception('Local DID file persist failed. did=%s', did)
+        return jsonify({'state': 'ERROR', 'msg': str(exc)}), 500
+
+    body = {
+        'state': 'OK',
+        'msg': '',
+        'data': {
+            'did': did,
+            'fingerprint': fingerprint,
+            'key_pair': {
+                'privatekey': private_export['d'],
+                'publickey': private_export['x'],
+                'address': wallet_account.get('address'),
+            },
+            'wallet': wallet_account,
+            'did_document': did_document,
+            'stored': {
+                'didDocumentPath': did_path,
+                'keyPath': key_path,
+            },
+        },
+        'local_db': {
+            'saved': False,
+            'userIdentifier': user_identifier,
+        },
+    }
+
+    try:
+        did_db.add_did(did, private_export['d'], private_export['x'], wallet_account.get('address'))
+        did_db.commit()
+        user_db.add_user(did, user_identifier)
+        user_db.commit()
+        body['local_db']['saved'] = True
+    except Exception as exc:
+        logging.exception('Local DID cache update failed. did=%s', did)
+        body['local_db']['error'] = str(exc)
+
+    return jsonify(body), 201
 
 
 @did_api.get('/dids')
