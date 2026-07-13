@@ -2,6 +2,7 @@ import os
 import logging
 from logging.handlers import RotatingFileHandler
 from flask import Flask, jsonify
+from werkzeug.exceptions import HTTPException
 from .routes.token import token_api
 from .routes.did import did_api
 from .routes.common import common_api
@@ -62,6 +63,12 @@ def create_app():
 
     @app.errorhandler(Exception)
     def handle_unexpected_error(error):
+        if isinstance(error, HTTPException):
+            return jsonify({
+                'state': 'ERROR',
+                'msg': error.description,
+            }), error.code
+
         app.logger.exception('Unhandled application error')
         return jsonify({
             'state': 'ERROR',

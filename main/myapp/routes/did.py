@@ -1,39 +1,24 @@
-import base64
 from datetime import datetime, timezone
 import json
-import logging
+import os
 from pathlib import Path
 import stat
 import threading
+import time
 
-from flask import Blueprint, jsonify, request
-import os
-import sys
-
-from myapp.dchain import post_dchain, proxy_response, request_json
-from myapp.utils import (
-    COMMON_ENDPOINTS,
-    DID_ENDPOINTS,
-    LOGIN_CREDENTIAL_TEMPLATE_ID,
-    LOGIN_CREDENTIAL_VALID_FROM,
-    LOGIN_CREDENTIAL_VALID_UNTIL,
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
 )
+from flask import Blueprint, abort, jsonify, request
+import jwt
+from jwt import ExpiredSignatureError, InvalidAudienceError
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-import DID_db
-import DID_db_get
-import USER_db
-import USER_db_get
 
 did_api = Blueprint('did', __name__)
 
-user_db = USER_db.User()
-get_user_info_db = USER_db_get.get_User_Info()
-did_db = DID_db.DID()
-get_did_info_db = DID_db_get.get_DID_Info()
-
-DATA_DIR = Path(os.getenv('DID_DATA_DIR', './data'))
+DATA_DIR = Path(os.getenv('DID_DATA_DIR') or os.getenv('DATA_DIR', './data'))
 DIDS_DIR = DATA_DIR / 'dids'
 KEYS_DIR = DATA_DIR / 'keys'
 INDEX_PATH = DATA_DIR / 'index.json'
@@ -44,6 +29,11 @@ for directory in (DIDS_DIR, KEYS_DIR):
 _index_lock = threading.Lock()
 _ED25519_PUB_CODEC_PREFIX = bytes([0xED, 0x01])
 _BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+_BASE58_INDEX = {char: index for index, char in enumerate(_BASE58_ALPHABET)}
+
+
+def _request_json():
+    return request.get_json(silent=True) or {}
 
 
 def _base58_encode(raw):
@@ -52,6 +42,7 @@ def _base58_encode(raw):
     while number:
         number, remainder = divmod(number, 58)
         encoded = _BASE58_ALPHABET[remainder] + encoded
+
     padding = 0
     for byte in raw:
         if byte == 0:
@@ -61,12 +52,39 @@ def _base58_encode(raw):
     return ('1' * padding) + (encoded or '1')
 
 
+def _base58_decode(value):
+    number = 0
+    for char in value:
+        if char not in _BASE58_INDEX:
+            raise ValueError(f'invalid base58 character: {char}')
+        number = number * 58 + _BASE58_INDEX[char]
+
+    raw = number.to_bytes((number.bit_length() + 7) // 8, 'big') if number else b''
+    padding = 0
+    for char in value:
+        if char == '1':
+            padding += 1
+        else:
+            break
+    return (b'\x00' * padding) + raw
+
+
 def _to_base58btc(raw):
     return 'z' + _base58_encode(raw)
 
 
+def _from_base58btc(value):
+    if not value or not value.startswith('z'):
+        raise ValueError('expected base58btc value')
+    return _base58_decode(value[1:])
+
+
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _jwt_now():
+    return int(time.time())
 
 
 def _chmod_600(path):
@@ -90,10 +108,22 @@ def _write_index(index):
     tmp_path.replace(INDEX_PATH)
 
 
-def _make_did_key_and_doc(label=None):
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+def _fingerprint_from_did(did):
+    if not isinstance(did, str) or not did.startswith('did:key:'):
+        raise ValueError('Only did:key is supported')
+    return did.split(':')[-1]
 
+
+def _fingerprint_from_did_or_fingerprint(value):
+    if not value or not isinstance(value, str):
+        abort(400, description='did or fingerprint is required')
+    value = value.strip()
+    if value.startswith('did:key:'):
+        return _fingerprint_from_did(value), value
+    return value, f'did:key:{value}'
+
+
+def make_did_key_and_doc(label=None):
     private_key = Ed25519PrivateKey.generate()
     public_key = private_key.public_key()
     private_bytes = private_key.private_bytes(
@@ -145,382 +175,302 @@ def _make_did_key_and_doc(label=None):
     return did, fingerprint, did_document, private_export, meta
 
 
-def _persist_local_did(fingerprint, did_document, private_export, meta, wallet_account=None):
+def persist_to_disk(fingerprint, did_document, private_export, meta):
     did_path = DIDS_DIR / f'{fingerprint}.did.json'
     key_path = KEYS_DIR / f'{fingerprint}.key.json'
-    stored_private_export = dict(private_export)
-    if wallet_account:
-        stored_private_export['wallet'] = wallet_account
 
     with did_path.open('w', encoding='utf-8') as file:
         json.dump(did_document, file, ensure_ascii=False, indent=2)
     with key_path.open('w', encoding='utf-8') as file:
-        json.dump(stored_private_export, file, ensure_ascii=False, indent=2)
+        json.dump(private_export, file, ensure_ascii=False, indent=2)
     _chmod_600(key_path)
 
     with _index_lock:
         index = _read_index()
-        index[meta['did']] = {key: meta[key] for key in ('created_at', 'label', 'fingerprint')}
-        if wallet_account:
-            index[meta['did']]['account_address'] = wallet_account.get('address')
+        index[meta['did']] = {
+            key: meta[key]
+            for key in ('created_at', 'label', 'fingerprint')
+        }
         _write_index(index)
 
     return str(did_path), str(key_path)
 
 
-def _extract_wallet_account(body):
-    data = body.get('data') or {}
-    key_pair = data.get('key_pair') or {}
-    return {
-        'address': key_pair.get('address'),
-        'privatekey': key_pair.get('privatekey') or key_pair.get('private_key'),
-        'publickey': key_pair.get('publickey') or key_pair.get('public_key'),
-    }
+def _load_private_key_by_did(did):
+    fingerprint = _fingerprint_from_did(did)
+    key_path = KEYS_DIR / f'{fingerprint}.key.json'
+    if not key_path.exists():
+        raise FileNotFoundError('private key not found on server')
+
+    with key_path.open('r', encoding='utf-8') as file:
+        data = json.load(file)
+    private_bytes = bytes.fromhex(data['d'])
+    return Ed25519PrivateKey.from_private_bytes(private_bytes), fingerprint
 
 
-def _create_wallet_account():
-    status_code, body = post_dchain(COMMON_ENDPOINTS['acc_create'], {})
-    if status_code != 200 or body.get('state') != 'OK':
-        return None, {
-            'status_code': status_code,
-            'state': body.get('state'),
-            'msg': body.get('msg'),
-            'rcode': body.get('rcode'),
-            'cid': body.get('cid'),
-        }
+def _load_public_key_from_diddoc(did):
+    fingerprint = _fingerprint_from_did(did)
+    did_path = DIDS_DIR / f'{fingerprint}.did.json'
+    if not did_path.exists():
+        raise FileNotFoundError('issuer DID document not found on server')
 
-    wallet_account = _extract_wallet_account(body)
-    if not wallet_account.get('address'):
-        return None, {
-            'status_code': status_code,
-            'state': body.get('state'),
-            'msg': 'wallet address not found in acc_create response',
-            'response': body,
-        }
+    with did_path.open('r', encoding='utf-8') as file:
+        did_document = json.load(file)
 
-    return wallet_account, None
+    verification_methods = did_document.get('verificationMethod', [])
+    if not verification_methods:
+        raise ValueError('No verificationMethod in DID document')
+
+    public_key_multibase = verification_methods[0].get('publicKeyMultibase')
+    public_bytes = _from_base58btc(public_key_multibase)
+    return Ed25519PublicKey.from_public_bytes(public_bytes)
 
 
-def _extract_account(data):
-    key_pair = data.get('key_pair') or {}
-    return {
-        'did': data.get('did'),
-        'private_key': key_pair.get('privatekey') or key_pair.get('private_key'),
-        'public_key': key_pair.get('publickey') or key_pair.get('public_key'),
-        'address': key_pair.get('address'),
-    }
-
-
-def _find_first_text(value, field_name):
-    if isinstance(value, dict):
-        current = value.get(field_name)
-        if isinstance(current, str) and current:
-            return current
-        if isinstance(current, list):
-            for item in current:
-                if isinstance(item, str) and item:
-                    return item
-        for child in value.values():
-            found = _find_first_text(child, field_name)
-            if found:
-                return found
-    if isinstance(value, list):
-        for child in value:
-            found = _find_first_text(child, field_name)
-            if found:
-                return found
-    return None
-
-
-def _extract_credential_jwt(body):
-    return _find_first_text(body.get('data') if isinstance(body, dict) else body, 'jwt')
-
-
-def _resolve_user_identifier(payload):
-    subject = payload.get('subject') if isinstance(payload, dict) else None
-    if isinstance(subject, dict) and subject.get('value'):
-        return subject.get('value')
-    return (
-        payload.get('userIdentifier')
-        or payload.get('userLoginIdentifier')
-        or payload.get('id')
-        or payload.get('user_id')
-    )
-
-
-def _build_login_credential_payload(did, user_identifier, payload):
-    return {
-        'did': did,
-        'template_id': payload.get('template_id') or LOGIN_CREDENTIAL_TEMPLATE_ID,
-        'subject': {
-            'key': 'id',
-            'value': user_identifier,
-        },
-        'validfrom': payload.get('validfrom') or LOGIN_CREDENTIAL_VALID_FROM,
-        'validuntil': payload.get('validuntil') or LOGIN_CREDENTIAL_VALID_UNTIL,
-    }
-
-
-def _store_credential(did, jwt, payload):
-    if not did or not jwt:
-        return
+def verify_vc_token(vc_jwt, aud=None):
     try:
-        user_identifier = _resolve_user_identifier(payload)
-        user_db.update_user_identifier(did, user_identifier)
-        user_db.update_credential(
-            did,
-            jwt,
-            payload.get('validfrom'),
-            payload.get('validuntil'),
+        unverified = jwt.decode(vc_jwt, options={'verify_signature': False})
+        issuer = unverified.get('iss')
+        if not issuer:
+            return False, 'No iss in VC'
+    except Exception as exc:
+        return False, f'malformed token: {exc}'
+
+    try:
+        public_key = _load_public_key_from_diddoc(issuer)
+    except Exception as exc:
+        return False, f'issuer key load failed: {exc}'
+
+    try:
+        payload = jwt.decode(
+            vc_jwt,
+            public_key,
+            algorithms=['EdDSA'],
+            options={
+                'require': ['iss', 'sub', 'exp', 'nbf', 'iat'],
+                'verify_aud': bool(aud),
+            },
+            audience=aud if aud else None,
         )
-        user_db.commit()
-    except Exception:
-        logging.exception('Local DID credential cache update failed. did=%s', did)
-
-
-def _attach_credential_response(data, credential_jwt, credential_payload, credential_data=None):
-    data['credentialJwt'] = credential_jwt
-    data['daeguCredentialJwt'] = credential_jwt
-    data['credentialValidFrom'] = credential_payload.get('validfrom')
-    data['credentialValidUntil'] = credential_payload.get('validuntil')
-    data['daeguCredentialValidFrom'] = credential_payload.get('validfrom')
-    data['daeguCredentialValidUntil'] = credential_payload.get('validuntil')
-    if credential_data is not None:
-        data['credential'] = credential_data
-
-
-def _decode_jwt_payload(jwt):
-    if not jwt or not isinstance(jwt, str):
-        return {}
-    parts = jwt.split('.')
-    if len(parts) < 2:
-        return {}
-    payload = parts[1]
-    payload += '=' * (-len(payload) % 4)
-    try:
-        return json.loads(base64.urlsafe_b64decode(payload.encode('utf-8')).decode('utf-8'))
-    except (ValueError, TypeError):
-        return {}
-
-
-def _subject_value(subject):
-    if not isinstance(subject, dict):
-        return None
-    key = subject.get('key')
-    value = subject.get('value')
-    if key is None or value is None:
-        return None
-    return f'{key}|{value}'
-
-
-def _matches_subject(jwt, subject):
-    expected = _subject_value(subject)
-    if not expected:
-        return True
-    return _decode_jwt_payload(jwt).get('val') == expected
-
-
-def _credential_already_issued(body):
-    rcode = body.get('rcode') or {}
-    msg = body.get('msg') or ''
-    return rcode.get('bcode') == 'B0712' or '이미 발행' in msg or 'already' in msg.lower()
-
-
-def _disclose_existing_credential(payload):
-    did = payload.get('did')
-    template_id = payload.get('template_id')
-    if not did or not template_id:
-        return None
-
-    status_code, body = post_dchain(DID_ENDPOINTS['disclosure'], {
-        'did': did,
-        'template_id': template_id,
-    })
-    if status_code != 200 or body.get('state') != 'OK':
-        return None
-
-    jwts = ((body.get('data') or {}).get('jwts')) or []
-    for item in jwts:
-        jwt = item.get('jwt') if isinstance(item, dict) else None
-        jwt_revoke = item.get('jwt_revoke') if isinstance(item, dict) else None
-        if jwt and not jwt_revoke and _matches_subject(jwt, payload.get('subject')):
-            return {
-                'jwt': jwt,
-                'disclosure': body.get('data'),
-            }
-    return None
+        return True, payload
+    except ExpiredSignatureError:
+        return False, 'expired'
+    except InvalidAudienceError:
+        return False, 'audience mismatch'
+    except Exception as exc:
+        return False, str(exc)
 
 
 @did_api.route('/create', methods=['POST'])
 @did_api.route('/create_account', methods=['POST'])
 @did_api.route('/signup', methods=['POST'])
 def create_did():
-    payload = request_json()
-    user_identifier = _resolve_user_identifier(payload)
-    label = payload.get('label') or user_identifier
+    body = _request_json()
+    label = body.get('label') or body.get('userIdentifier') or body.get('id') or body.get('user_id')
 
-    try:
-        did, fingerprint, did_document, private_export, meta = _make_did_key_and_doc(label)
-    except Exception as exc:
-        logging.exception('Local DID generation failed.')
-        return jsonify({'state': 'ERROR', 'msg': str(exc)}), 500
+    did, fingerprint, did_document, private_export, meta = make_did_key_and_doc(label=label)
+    did_path, key_path = persist_to_disk(fingerprint, did_document, private_export, meta)
 
-    wallet_account, wallet_error = _create_wallet_account()
-    if wallet_error:
-        logging.error('Wallet account generation failed. did=%s error=%s', did, wallet_error)
-        return jsonify({
-            'state': 'ERROR',
-            'msg': 'wallet account generation failed',
-            'walletError': wallet_error,
-        }), 502
-
-    try:
-        did_path, key_path = _persist_local_did(
-            fingerprint,
-            did_document,
-            private_export,
-            meta,
-            wallet_account,
-        )
-    except Exception as exc:
-        logging.exception('Local DID file persist failed. did=%s', did)
-        return jsonify({'state': 'ERROR', 'msg': str(exc)}), 500
-
-    body = {
+    return jsonify({
         'state': 'OK',
         'msg': '',
         'data': {
             'did': did,
             'fingerprint': fingerprint,
+            'label': label,
             'key_pair': {
                 'privatekey': private_export['d'],
                 'publickey': private_export['x'],
-                'address': wallet_account.get('address'),
             },
-            'wallet': wallet_account,
             'did_document': did_document,
             'stored': {
                 'didDocumentPath': did_path,
                 'keyPath': key_path,
             },
         },
-        'local_db': {
-            'saved': False,
-            'userIdentifier': user_identifier,
-        },
-    }
-
-    try:
-        did_db.add_did(did, private_export['d'], private_export['x'], wallet_account.get('address'))
-        did_db.commit()
-        user_db.add_user(did, user_identifier)
-        user_db.commit()
-        body['local_db']['saved'] = True
-    except Exception as exc:
-        logging.exception('Local DID cache update failed. did=%s', did)
-        body['local_db']['error'] = str(exc)
-
-    return jsonify(body), 201
+    }), 201
 
 
 @did_api.get('/dids')
-def list_local_dids():
-    dids = [
-        {
-            'did': row[0],
-            'private_key': row[1],
-            'public_key': row[2],
-            'account_address': row[3],
-        }
-        for row in get_did_info_db.get_DID_info_all()
+def list_dids():
+    with _index_lock:
+        index = _read_index()
+    items = [
+        {'did': did, **meta}
+        for did, meta in sorted(
+            index.items(),
+            key=lambda item: item[1].get('created_at', ''),
+            reverse=True,
+        )
     ]
-    return jsonify({'dids': dids})
+    return jsonify({'count': len(items), 'items': items})
+
+
+@did_api.route('/resolve', methods=['POST'])
+def resolve_did():
+    body = _request_json()
+    did_or_fingerprint = body.get('did') or body.get('fingerprint') or body.get('label')
+    fingerprint, _did = _fingerprint_from_did_or_fingerprint(did_or_fingerprint)
+
+    did_path = DIDS_DIR / f'{fingerprint}.did.json'
+    if not did_path.exists():
+        abort(404, description='DID not found on server')
+    with did_path.open('r', encoding='utf-8') as file:
+        return jsonify(json.load(file))
 
 
 @did_api.route('/delete', methods=['POST'])
-def delete_local_did():
-    did = request_json().get('did') or request_json().get('label')
-    if not did:
-        return jsonify({'state': 'ERROR', 'msg': 'did is required'}), 400
-    did_db.remove(did)
-    did_db.commit()
-    return jsonify({'state': 'OK', 'did': did})
+def delete_did():
+    body = _request_json()
+    did_or_fingerprint = body.get('did') or body.get('fingerprint') or body.get('label')
+    fingerprint, did = _fingerprint_from_did_or_fingerprint(did_or_fingerprint)
+
+    did_path = DIDS_DIR / f'{fingerprint}.did.json'
+    key_path = KEYS_DIR / f'{fingerprint}.key.json'
+    removed = {'didDocument': False, 'privateKey': False}
+
+    if did_path.exists():
+        did_path.unlink()
+        removed['didDocument'] = True
+    if key_path.exists():
+        key_path.unlink()
+        removed['privateKey'] = True
+
+    with _index_lock:
+        index = _read_index()
+        if did in index:
+            del index[did]
+            _write_index(index)
+
+    if not any(removed.values()):
+        abort(404, description='Nothing to delete; DID not found')
+
+    return jsonify({'state': 'OK', 'deleted': removed, 'did': did})
 
 
-@did_api.route('/accounts', methods=['GET', 'POST'])
-def accounts():
-    return proxy_response(DID_ENDPOINTS['accounts'], request_json())
+@did_api.route('/issue-vc', methods=['POST'])
+def issue_vc():
+    body = _request_json()
+    issuer = body.get('issuer')
+    subject = body.get('subject')
+    claims = body.get('claims', {})
+    ttl = int(body.get('ttl', 3600))
+    aud = body.get('aud')
+
+    if not issuer or not subject:
+        abort(400, description='issuer and subject are required')
+
+    private_key, _fingerprint = _load_private_key_by_did(issuer)
+    now = _jwt_now()
+    exp = now + ttl
+
+    payload = {
+        'iss': issuer,
+        'sub': subject,
+        'nbf': now,
+        'iat': now,
+        'exp': exp,
+        'vc': {
+            '@context': ['https://www.w3.org/2018/credentials/v1'],
+            'type': ['VerifiableCredential'],
+            'credentialSubject': claims,
+        },
+    }
+    if aud:
+        payload['aud'] = aud
+
+    vc_jwt = jwt.encode(payload, private_key, algorithm='EdDSA')
+    return jsonify({'vc_jwt': vc_jwt, 'exp': exp})
 
 
-@did_api.route('/projects', methods=['GET', 'POST'])
-def projects():
-    return proxy_response(DID_ENDPOINTS['projects'], request_json())
+@did_api.route('/verify-vc', methods=['POST'])
+def verify_vc():
+    body = _request_json()
+    token = body.get('vc_jwt')
+    aud = body.get('aud')
+    if not token:
+        abort(400, description='vc_jwt is required')
+
+    ok, data = verify_vc_token(token, aud=aud)
+    if ok:
+        return jsonify({'valid': True, 'payload': data})
+    return jsonify({'valid': False, 'reason': data}), 400
 
 
-@did_api.route('/templates', methods=['GET', 'POST'])
-def templates():
-    return proxy_response(DID_ENDPOINTS['templates'], request_json())
+@did_api.route('/present-vp', methods=['POST'])
+def present_vp():
+    body = _request_json()
+    holder = body.get('holder')
+    vc_jwts = body.get('vc_jwts', [])
+    aud = body.get('aud')
+    ttl = int(body.get('ttl', 300))
+
+    if not holder or not vc_jwts or not aud:
+        abort(400, description='holder, vc_jwts, aud are required')
+
+    private_key, _fingerprint = _load_private_key_by_did(holder)
+    now = _jwt_now()
+    exp = now + ttl
+
+    payload = {
+        'iss': holder,
+        'aud': aud,
+        'nbf': now,
+        'iat': now,
+        'exp': exp,
+        'vp': {
+            '@context': ['https://www.w3.org/2018/credentials/v1'],
+            'type': ['VerifiablePresentation'],
+            'verifiableCredential': vc_jwts,
+        },
+    }
+
+    vp_jwt = jwt.encode(payload, private_key, algorithm='EdDSA')
+    return jsonify({'vp_jwt': vp_jwt, 'exp': exp})
 
 
-@did_api.route('/issue', methods=['POST'])
-def issue_credential():
-    payload = request_json()
-    subject = payload.get('subject') or payload.get('subjects')
-    if subject is not None:
-        payload['subject'] = subject
-        payload.pop('subjects', None)
-    status_code, body = post_dchain(DID_ENDPOINTS['issue'], payload)
-    if body.get('state') == 'OK':
-        credential_jwt = _extract_credential_jwt(body)
-        if credential_jwt:
-            _store_credential(payload.get('did'), credential_jwt, payload)
-            _attach_credential_response(body.setdefault('data', {}), credential_jwt, payload)
-        return jsonify(body), status_code
+@did_api.route('/verify-vp', methods=['POST'])
+def verify_vp():
+    body = _request_json()
+    token = body.get('vp_jwt')
+    expected_aud = body.get('aud')
+    if not token or not expected_aud:
+        abort(400, description='vp_jwt and aud are required')
 
-    if _credential_already_issued(body):
-        existing_credential = _disclose_existing_credential(payload)
-        if existing_credential:
-            _store_credential(payload.get('did'), existing_credential.get('jwt'), payload)
-            return jsonify({
-                'state': 'OK',
-                'msg': '',
-                'rcode': {},
-                'data': existing_credential,
-            }), 200
+    try:
+        unverified = jwt.decode(token, options={'verify_signature': False})
+        holder = unverified.get('iss')
+        if not holder:
+            raise ValueError('No iss in VP')
+    except Exception as exc:
+        return jsonify({'valid': False, 'reason': f'malformed token: {exc}'}), 400
 
-    return jsonify(body), status_code
+    try:
+        public_key = _load_public_key_from_diddoc(holder)
+        payload = jwt.decode(
+            token,
+            public_key,
+            algorithms=['EdDSA'],
+            options={'require': ['iss', 'aud', 'exp', 'nbf', 'iat']},
+            audience=expected_aud,
+        )
+    except ExpiredSignatureError:
+        return jsonify({'valid': False, 'reason': 'expired'}), 400
+    except InvalidAudienceError:
+        return jsonify({'valid': False, 'reason': 'audience mismatch'}), 400
+    except Exception as exc:
+        return jsonify({'valid': False, 'reason': str(exc)}), 400
 
+    vcs = []
+    for vc_jwt in payload.get('vp', {}).get('verifiableCredential', []):
+        ok, data = verify_vc_token(vc_jwt, aud=None)
+        if ok:
+            vcs.append({'valid': True, 'iss': data.get('iss'), 'sub': data.get('sub')})
+        else:
+            vcs.append({'valid': False, 'reason': data})
 
-@did_api.route('/revoke', methods=['POST'])
-def revoke_credential():
-    return proxy_response(DID_ENDPOINTS['revoke'], request_json())
-
-
-@did_api.route('/verification', methods=['POST'])
-def verification():
-    return proxy_response(DID_ENDPOINTS['verification'], request_json())
-
-
-@did_api.route('/disclosure', methods=['POST'])
-def disclosure():
-    return proxy_response(DID_ENDPOINTS['disclosure'], request_json())
-
-
-@did_api.route('/qrcode', methods=['POST'])
-def qrcode():
-    return proxy_response(DID_ENDPOINTS['qrcode'], request_json())
-
-
-@did_api.route('/get_key', methods=['POST'])
-def get_key():
-    return proxy_response(DID_ENDPOINTS['get_key'], request_json())
-
-
-@did_api.route('/regist_project', methods=['POST'])
-def regist_project():
-    return proxy_response(DID_ENDPOINTS['regist_project'], request_json())
-
-
-@did_api.route('/edit_template', methods=['POST'])
-def edit_template():
-    return proxy_response(DID_ENDPOINTS['edit_template'], request_json())
+    return jsonify({
+        'valid': all(item.get('valid') for item in vcs),
+        'holder': holder,
+        'vcs': vcs,
+        'payload': payload,
+    })
