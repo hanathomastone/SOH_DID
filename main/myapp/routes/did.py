@@ -14,6 +14,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from flask import Blueprint, abort, jsonify, request
 import jwt
 from jwt import ExpiredSignatureError, InvalidAudienceError
+import requests
+
+from myapp.utils import API_TOKEN, BASE_URL, CHAIN_NAME, HEADERS
 
 
 did_api = Blueprint('did', __name__)
@@ -175,14 +178,56 @@ def make_did_key_and_doc(label=None):
     return did, fingerprint, did_document, private_export, meta
 
 
-def persist_to_disk(fingerprint, did_document, private_export, meta):
+def _create_wallet_account():
+    url = BASE_URL + '/com/acc_create'
+    payload = {
+        'token': API_TOKEN,
+        'chain': CHAIN_NAME,
+    }
+    response = requests.post(url, headers=HEADERS, json=payload, timeout=20)
+    try:
+        body = response.json()
+    except ValueError:
+        body = {'state': 'ERROR', 'msg': response.text}
+
+    if response.status_code != 200 or body.get('state') != 'OK':
+        return None, {
+            'status_code': response.status_code,
+            'state': body.get('state'),
+            'msg': body.get('msg'),
+            'rcode': body.get('rcode'),
+            'cid': body.get('cid'),
+            'response': body,
+        }
+
+    key_pair = (body.get('data') or {}).get('key_pair') or {}
+    wallet_account = {
+        'address': key_pair.get('address'),
+        'privatekey': key_pair.get('privatekey') or key_pair.get('private_key'),
+        'publickey': key_pair.get('publickey') or key_pair.get('public_key'),
+    }
+    if not wallet_account.get('address'):
+        return None, {
+            'status_code': response.status_code,
+            'state': body.get('state'),
+            'msg': 'wallet address not found in acc_create response',
+            'response': body,
+        }
+
+    return wallet_account, None
+
+
+def persist_to_disk(fingerprint, did_document, private_export, meta, wallet_account=None):
     did_path = DIDS_DIR / f'{fingerprint}.did.json'
     key_path = KEYS_DIR / f'{fingerprint}.key.json'
+    stored_private_export = dict(private_export)
+    if wallet_account:
+        stored_private_export['wallet'] = wallet_account
 
     with did_path.open('w', encoding='utf-8') as file:
         json.dump(did_document, file, ensure_ascii=False, indent=2)
     with key_path.open('w', encoding='utf-8') as file:
-        json.dump(private_export, file, ensure_ascii=False, indent=2)
+        json.dump(stored_private_export, file, ensure_ascii=False, indent=2)
     _chmod_600(key_path)
 
     with _index_lock:
@@ -191,6 +236,8 @@ def persist_to_disk(fingerprint, did_document, private_export, meta):
             key: meta[key]
             for key in ('created_at', 'label', 'fingerprint')
         }
+        if wallet_account:
+            index[meta['did']]['account_address'] = wallet_account.get('address')
         _write_index(index)
 
     return str(did_path), str(key_path)
@@ -268,7 +315,21 @@ def create_did():
     label = body.get('label') or body.get('userIdentifier') or body.get('id') or body.get('user_id')
 
     did, fingerprint, did_document, private_export, meta = make_did_key_and_doc(label=label)
-    did_path, key_path = persist_to_disk(fingerprint, did_document, private_export, meta)
+    wallet_account, wallet_error = _create_wallet_account()
+    if wallet_error:
+        return jsonify({
+            'state': 'ERROR',
+            'msg': 'wallet account generation failed',
+            'walletError': wallet_error,
+        }), 502
+
+    did_path, key_path = persist_to_disk(
+        fingerprint,
+        did_document,
+        private_export,
+        meta,
+        wallet_account=wallet_account,
+    )
 
     return jsonify({
         'state': 'OK',
@@ -280,7 +341,9 @@ def create_did():
             'key_pair': {
                 'privatekey': private_export['d'],
                 'publickey': private_export['x'],
+                'address': wallet_account.get('address'),
             },
+            'wallet': wallet_account,
             'did_document': did_document,
             'stored': {
                 'didDocumentPath': did_path,
