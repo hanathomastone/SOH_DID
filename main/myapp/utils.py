@@ -1,6 +1,6 @@
 import os
 
-BASE_URL = os.getenv('DCHAIN_BASE_URL', 'https://www.daegu.go.kr/daeguchain/v2/mitum')
+BASE_URL = os.getenv('DCHAIN_BASE_URL', 'http://192.168.50.107/daeguchain/v2/mitum')
 API_TOKEN = os.getenv('DCHAIN_API_TOKEN', '234f2b655e789914a7574f607f0f9ebd')
 CHAIN_NAME = os.getenv('DCHAIN_CHAIN_NAME', 'dchain')
 LOGIN_CREDENTIAL_TEMPLATE_ID = os.getenv('DCHAIN_LOGIN_CREDENTIAL_TEMPLATE_ID', 'VLVSWVRSOPZJMPINTBNA')
