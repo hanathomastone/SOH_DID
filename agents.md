@@ -1,6 +1,6 @@
 # SOH_DID Agents Handoff
 
-Last updated: 2026-07-16
+Last updated: 2026-07-17
 
 ## Workspace Rule
 
@@ -44,6 +44,7 @@ Recent Git history shows these completed changes:
 - Added configurable log directory behavior and API response display changes.
 - Updated token support so token creation stores local contract metadata and token transfer can update user token balances.
 - Updated `utils.py` configuration defaults.
+- Changed default and EC2 example `DCHAIN_BASE_URL` from the old private/internal URL to `https://daegu.go.kr/daeguchain`.
 
 Current status at the time this file was created:
 
@@ -59,6 +60,7 @@ Current status at the time this file was created:
 - `main/logs/app.log` is tracked in the repository. Consider whether runtime logs should move to `.gitignore`.
 - The DID implementation currently writes generated DID data and private keys to local disk. Confirm `DID_DATA_DIR` or `DATA_DIR` in each environment before testing or deploying.
 - DChain and MySQL integration tests may require network access and real credentials.
+- DID generation is local to this app, but wallet creation, token creation, token transfer, token list, and other chain functions go through Daegu Chain using `DCHAIN_BASE_URL`.
 
 ## TODO
 
