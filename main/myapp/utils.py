@@ -1,8 +1,17 @@
 import os
 
+
+def _float_env(name, default):
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
 BASE_URL = os.getenv('DCHAIN_BASE_URL', 'https://daegu.go.kr/daeguchain')
 API_TOKEN = os.getenv('DCHAIN_API_TOKEN', '234f2b655e789914a7574f607f0f9ebd')
 CHAIN_NAME = os.getenv('DCHAIN_CHAIN_NAME', 'dchain')
+DCHAIN_TIMEOUT = _float_env('DCHAIN_TIMEOUT', 20)
 LOGIN_CREDENTIAL_TEMPLATE_ID = os.getenv('DCHAIN_LOGIN_CREDENTIAL_TEMPLATE_ID', 'VLVSWVRSOPZJMPINTBNA')
 LOGIN_CREDENTIAL_VALID_FROM = os.getenv('DCHAIN_LOGIN_CREDENTIAL_VALID_FROM', '2026-06-01')
 LOGIN_CREDENTIAL_VALID_UNTIL = os.getenv('DCHAIN_LOGIN_CREDENTIAL_VALID_UNTIL', '2026-12-01')

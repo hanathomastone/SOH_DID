@@ -15,8 +15,10 @@ from flask import Blueprint, abort, jsonify, request
 import jwt
 from jwt import ExpiredSignatureError, InvalidAudienceError
 import requests
+from requests import exceptions as request_exceptions
 
-from myapp.utils import API_TOKEN, BASE_URL, CHAIN_NAME, HEADERS
+from myapp.dchain import dchain_url
+from myapp.utils import API_TOKEN, CHAIN_NAME, DCHAIN_TIMEOUT, HEADERS
 
 
 did_api = Blueprint('did', __name__)
@@ -179,12 +181,40 @@ def make_did_key_and_doc(label=None):
 
 
 def _create_wallet_account():
-    url = BASE_URL + '/com/acc_create'
+    url = dchain_url('/com/acc_create')
     payload = {
         'token': API_TOKEN,
         'chain': CHAIN_NAME,
     }
-    response = requests.post(url, headers=HEADERS, json=payload, timeout=20)
+    try:
+        response = requests.post(url, headers=HEADERS, json=payload, timeout=DCHAIN_TIMEOUT)
+    except request_exceptions.Timeout as exc:
+        return None, {
+            'status_code': 504,
+            'state': 'ERROR',
+            'msg': 'DChain wallet account generation timed out',
+            'url': url,
+            'timeout': DCHAIN_TIMEOUT,
+            'error_type': exc.__class__.__name__,
+        }
+    except request_exceptions.ConnectionError as exc:
+        return None, {
+            'status_code': 502,
+            'state': 'ERROR',
+            'msg': 'DChain wallet account connection failed',
+            'url': url,
+            'timeout': DCHAIN_TIMEOUT,
+            'error_type': exc.__class__.__name__,
+        }
+    except request_exceptions.RequestException as exc:
+        return None, {
+            'status_code': 502,
+            'state': 'ERROR',
+            'msg': 'DChain wallet account request failed',
+            'url': url,
+            'timeout': DCHAIN_TIMEOUT,
+            'error_type': exc.__class__.__name__,
+        }
     try:
         body = response.json()
     except ValueError:
@@ -321,7 +351,7 @@ def create_did():
             'state': 'ERROR',
             'msg': 'wallet account generation failed',
             'walletError': wallet_error,
-        }), 502
+        }), wallet_error.get('status_code', 502)
 
     did_path, key_path = persist_to_disk(
         fingerprint,

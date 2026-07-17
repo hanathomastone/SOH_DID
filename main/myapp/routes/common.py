@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify
 
-from myapp.dchain import proxy_response, request_json
-from myapp.utils import COMMON_ENDPOINTS
+from myapp.dchain import dchain_url, proxy_response, request_json
+from myapp.utils import BASE_URL, CHAIN_NAME, COMMON_ENDPOINTS, DCHAIN_TIMEOUT, TOKEN_ENDPOINTS
 
 common_api = Blueprint('common', __name__)
 
@@ -9,6 +9,17 @@ common_api = Blueprint('common', __name__)
 @common_api.route('/endpoints', methods=['GET'])
 def endpoints():
     return jsonify(COMMON_ENDPOINTS)
+
+
+@common_api.route('/dchain_config', methods=['GET'])
+def dchain_config():
+    return jsonify({
+        'base_url': BASE_URL,
+        'chain': CHAIN_NAME,
+        'timeout': DCHAIN_TIMEOUT,
+        'endpoints': COMMON_ENDPOINTS,
+        'token_tokens_url': dchain_url(TOKEN_ENDPOINTS['tokens']),
+    })
 
 
 @common_api.route('/node_info', methods=['GET', 'POST'])
