@@ -9,7 +9,7 @@ def _float_env(name, default):
 
 
 BASE_URL = os.getenv('DCHAIN_BASE_URL', 'https://daegu.go.kr/daeguchain')
-API_TOKEN = os.getenv('DCHAIN_API_TOKEN', '234f2b655e789914a7574f607f0f9ebd')
+API_TOKEN = os.getenv('DCHAIN_API_TOKEN', '7d0150355f116bb3d9590ce90a7842a2')
 CHAIN_NAME = os.getenv('DCHAIN_CHAIN_NAME', 'dchain')
 DCHAIN_TIMEOUT = _float_env('DCHAIN_TIMEOUT', 20)
 LOGIN_CREDENTIAL_TEMPLATE_ID = os.getenv('DCHAIN_LOGIN_CREDENTIAL_TEMPLATE_ID', 'VLVSWVRSOPZJMPINTBNA')
@@ -24,9 +24,9 @@ HEADERS = {
     'Content-Type': 'application/json',
     'Accept' : 'application/json'
     }
-OWNER_ADDR = os.getenv('DCHAIN_OWNER_ADDR', '0x65e00aBd9782cf12839acd07B7D13f7E23D08432fca')
-OWNER_PRIVATE = os.getenv('DCHAIN_OWNER_PRIVATE', '59c191aba12df1ce59cae76c1c22399fa25e43350880f9595d9bf55e23b3f9cafpr')
-OWNER_DID = os.getenv('DCHAIN_OWNER_DID', "did:mitum:minic:0x65e00aBd9782cf12839acd07B7D13f7E23D08432fca")
+OWNER_ADDR = os.getenv('DCHAIN_OWNER_ADDR', '0xd04814DF7e0301C35d292614a05D8aec8904FF7Cfca')
+OWNER_PRIVATE = os.getenv('DCHAIN_OWNER_PRIVATE', '48794a4a62663561b2d55b298f9be998a9625b077ca6fe6f988a69b23e7b1a8efpr')
+OWNER_DID = os.getenv('DCHAIN_OWNER_DID', "did:mitum:minic:0xd04814DF7e0301C35d292614a05D8aec8904FF7Cfca")
 
 DID_ENDPOINTS = {
     'create_account': '/did/create_account',
