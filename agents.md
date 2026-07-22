@@ -48,6 +48,7 @@ Recent Git history shows these completed changes:
 - Added structured DChain timeout/connection error responses, a configurable `DCHAIN_TIMEOUT`, and `/common/dchain_config` to confirm the effective upstream settings on deployed servers.
 - Set DChain chain name defaults/examples to `minic`, matching `did:mitum:minic:*` owner DIDs and avoiding DChain `B0701` invalid chain errors.
 - Added `created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP` to the local MySQL `DID` and `user` tables so new rows record creation time automatically.
+- Connected `/did/create`, `/did/create_account`, and `/did/signup` to MySQL persistence so successful DID creation inserts/updates both `DID` and `user` rows.
 
 Current status at the time this file was created:
 

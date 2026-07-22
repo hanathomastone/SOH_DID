@@ -18,6 +18,7 @@ import requests
 from requests import exceptions as request_exceptions
 
 from myapp.dchain import dchain_url
+from myapp.mysql_db import connect, ensure_tables
 from myapp.utils import API_TOKEN, CHAIN_NAME, DCHAIN_TIMEOUT, HEADERS
 
 
@@ -273,6 +274,58 @@ def persist_to_disk(fingerprint, did_document, private_export, meta, wallet_acco
     return str(did_path), str(key_path)
 
 
+def persist_to_mysql(did, private_export, wallet_account, label=None):
+    ensure_tables()
+    conn = connect()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO DID (DID, private_key, public_key, account_address)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    private_key = VALUES(private_key),
+                    public_key = VALUES(public_key),
+                    account_address = VALUES(account_address)
+                """,
+                (
+                    did,
+                    private_export['d'],
+                    private_export['x'],
+                    wallet_account.get('address'),
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO `user` (
+                    DID,
+                    user_identifier,
+                    ESSENTIAL_VIDEO_1,
+                    ESSENTIAL_VIDEO_2,
+                    ESSENTIAL_VIDEO_3,
+                    ESSENTIAL_VIDEO_4,
+                    ESSENTIAL_VIDEO_5,
+                    OPTIONAL_VIDEO_1,
+                    OPTIONAL_VIDEO_2,
+                    OPTIONAL_VIDEO_3,
+                    OPTIONAL_VIDEO_4,
+                    OPTIONAL_VIDEO_5,
+                    OPTIONAL_VIDEO_6,
+                    OPTIONAL_VIDEO_7
+                ) VALUES (%s, %s, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                ON DUPLICATE KEY UPDATE
+                    user_identifier = COALESCE(VALUES(user_identifier), user_identifier)
+                """,
+                (did, label),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _load_private_key_by_did(did):
     fingerprint = _fingerprint_from_did(did)
     key_path = KEYS_DIR / f'{fingerprint}.key.json'
@@ -360,6 +413,30 @@ def create_did():
         meta,
         wallet_account=wallet_account,
     )
+    try:
+        persist_to_mysql(
+            did,
+            private_export,
+            wallet_account,
+            label=label,
+        )
+    except Exception as exc:
+        return jsonify({
+            'state': 'ERROR',
+            'msg': 'DID generated but MySQL persistence failed',
+            'dbError': {
+                'error_type': exc.__class__.__name__,
+                'msg': str(exc),
+            },
+            'data': {
+                'did': did,
+                'fingerprint': fingerprint,
+                'stored': {
+                    'didDocumentPath': did_path,
+                    'keyPath': key_path,
+                },
+            },
+        }), 500
 
     return jsonify({
         'state': 'OK',
@@ -378,6 +455,7 @@ def create_did():
             'stored': {
                 'didDocumentPath': did_path,
                 'keyPath': key_path,
+                'mysql': True,
             },
         },
     }), 201
