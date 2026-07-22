@@ -8,7 +8,7 @@ def _float_env(name, default):
         return default
 
 
-BASE_URL = os.getenv('DCHAIN_BASE_URL', 'https://daegu.go.kr/daeguchain')
+BASE_URL = os.getenv('DCHAIN_BASE_URL', 'https://www.daegu.go.kr/daeguchain/v2/mitum')
 API_TOKEN = os.getenv('DCHAIN_API_TOKEN', '7d0150355f116bb3d9590ce90a7842a2')
 CHAIN_NAME = os.getenv('DCHAIN_CHAIN_NAME', 'dchain')
 DCHAIN_TIMEOUT = _float_env('DCHAIN_TIMEOUT', 20)
