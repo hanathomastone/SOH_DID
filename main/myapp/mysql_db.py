@@ -33,10 +33,12 @@ def ensure_tables():
                     DID VARCHAR(255) PRIMARY KEY,
                     private_key TEXT,
                     public_key TEXT,
-                    account_address VARCHAR(255)
+                    account_address VARCHAR(255),
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
                 """
             )
+            ensure_column(cursor, 'DID', 'created_at', 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP')
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS `user` (
@@ -52,10 +54,12 @@ def ensure_tables():
                     OPTIONAL_VIDEO_4 INT DEFAULT 0,
                     OPTIONAL_VIDEO_5 INT DEFAULT 0,
                     OPTIONAL_VIDEO_6 INT DEFAULT 0,
-                    OPTIONAL_VIDEO_7 INT DEFAULT 0
+                    OPTIONAL_VIDEO_7 INT DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
                 """
             )
+            ensure_column(cursor, 'user', 'created_at', 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP')
             ensure_column(cursor, 'user', 'user_identifier', 'VARCHAR(255) NULL')
             ensure_column(cursor, 'user', 'credential_jwt', 'TEXT NULL')
             ensure_column(cursor, 'user', 'credential_status', 'VARCHAR(20) NULL')

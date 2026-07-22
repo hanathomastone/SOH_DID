@@ -1,6 +1,6 @@
 # SOH_DID Agents Handoff
 
-Last updated: 2026-07-17
+Last updated: 2026-07-22
 
 ## Workspace Rule
 
@@ -44,8 +44,10 @@ Recent Git history shows these completed changes:
 - Added configurable log directory behavior and API response display changes.
 - Updated token support so token creation stores local contract metadata and token transfer can update user token balances.
 - Updated `utils.py` configuration defaults.
-- Changed default and EC2 example `DCHAIN_BASE_URL` from the old private/internal URL to `https://daegu.go.kr/daeguchain`.
+- Changed default and EC2 example `DCHAIN_BASE_URL` from the old private/internal URL to `https://www.daegu.go.kr/daeguchain/v2/mitum`.
 - Added structured DChain timeout/connection error responses, a configurable `DCHAIN_TIMEOUT`, and `/common/dchain_config` to confirm the effective upstream settings on deployed servers.
+- Set DChain chain name defaults/examples to `minic`, matching `did:mitum:minic:*` owner DIDs and avoiding DChain `B0701` invalid chain errors.
+- Added `created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP` to the local MySQL `DID` and `user` tables so new rows record creation time automatically.
 
 Current status at the time this file was created:
 
@@ -62,7 +64,7 @@ Current status at the time this file was created:
 - The DID implementation currently writes generated DID data and private keys to local disk. Confirm `DID_DATA_DIR` or `DATA_DIR` in each environment before testing or deploying.
 - DChain and MySQL integration tests may require network access and real credentials.
 - DID generation is local to this app, but wallet creation, token creation, token transfer, token list, and other chain functions go through Daegu Chain using `DCHAIN_BASE_URL`.
-- If token list/history lookup still fails after deployment, call `/common/dchain_config` on the running server first to confirm the effective `DCHAIN_BASE_URL`; environment variables can override code defaults.
+- If token list/history lookup still fails after deployment, call `/common/dchain_config` on the running server first to confirm the effective `DCHAIN_BASE_URL`; environment variables can override code defaults. On EC2, systemd reads this from `/etc/soh-did/soh-did.env`.
 
 ## TODO
 

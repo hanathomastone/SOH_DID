@@ -10,7 +10,7 @@ def _float_env(name, default):
 
 BASE_URL = os.getenv('DCHAIN_BASE_URL', 'https://www.daegu.go.kr/daeguchain/v2/mitum')
 API_TOKEN = os.getenv('DCHAIN_API_TOKEN', '7d0150355f116bb3d9590ce90a7842a2')
-CHAIN_NAME = os.getenv('DCHAIN_CHAIN_NAME', 'dchain')
+CHAIN_NAME = os.getenv('DCHAIN_CHAIN_NAME', 'minic')
 DCHAIN_TIMEOUT = _float_env('DCHAIN_TIMEOUT', 20)
 LOGIN_CREDENTIAL_TEMPLATE_ID = os.getenv('DCHAIN_LOGIN_CREDENTIAL_TEMPLATE_ID', 'VLVSWVRSOPZJMPINTBNA')
 LOGIN_CREDENTIAL_VALID_FROM = os.getenv('DCHAIN_LOGIN_CREDENTIAL_VALID_FROM', '2026-06-01')
