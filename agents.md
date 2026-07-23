@@ -50,6 +50,7 @@ Recent Git history shows these completed changes:
 - Added `created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP` to the local MySQL `DID` and `user` tables so new rows record creation time automatically.
 - Connected `/did/create`, `/did/create_account`, and `/did/signup` to MySQL persistence so successful DID creation inserts/updates both `DID` and `user` rows.
 - Added warning logs for failed `/token/transfer` requests showing the received payload and DChain payload with private key fields redacted.
+- Changed DChain proxy authentication to always use server-side `DCHAIN_API_TOKEN` and `DCHAIN_CHAIN_NAME`, preventing client-supplied `token` or `chain` fields from overriding upstream auth.
 
 Current status at the time this file was created:
 

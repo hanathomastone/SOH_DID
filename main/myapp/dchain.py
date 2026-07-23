@@ -11,8 +11,8 @@ def request_json():
 
 def with_auth(payload=None):
     data = dict(payload or {})
-    data.setdefault('token', API_TOKEN)
-    data.setdefault('chain', CHAIN_NAME)
+    data['token'] = API_TOKEN
+    data['chain'] = CHAIN_NAME
     return data
 
 
