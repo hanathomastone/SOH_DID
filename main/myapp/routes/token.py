@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, current_app, jsonify
 import json
 import os
 import sys
@@ -21,6 +21,43 @@ get_token_info = Token_db_get.get_Token_info()
 get_did_info_db = DID_db_get.get_DID_Info()
 user_db = USER_db.User()
 get_user_info_db = USER_db_get.get_User_Info()
+
+
+SENSITIVE_LOG_KEYS = {
+    'owner_pkey',
+    'owner_private',
+    'private_key',
+    'privatekey',
+    'sender_pkey',
+}
+
+
+def _redact_for_log(value):
+    if isinstance(value, dict):
+        return {
+            key: '***REDACTED***' if key in SENSITIVE_LOG_KEYS else _redact_for_log(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_for_log(item) for item in value]
+    return value
+
+
+def _log_transfer_failure(reason, received_payload, dchain_payload=None, status_code=None, response_body=None):
+    log_data = {
+        'reason': reason,
+        'received_payload': _redact_for_log(received_payload),
+    }
+    if dchain_payload is not None:
+        log_data['dchain_payload'] = _redact_for_log(dchain_payload)
+    if status_code is not None:
+        log_data['status_code'] = status_code
+    if response_body is not None:
+        log_data['response_body'] = _redact_for_log(response_body)
+    current_app.logger.warning(
+        'token transfer failed payload=%s',
+        json.dumps(log_data, ensure_ascii=False, default=str),
+    )
 
 
 def _with_owner(payload):
@@ -89,15 +126,18 @@ def create_token():
 
 @token_api.route('/transfer', methods=['POST'])
 def transfer():
-    payload = request_json()
+    received_payload = request_json()
+    payload = dict(received_payload)
     if 'token_name' in payload:
         try:
             payload['token_name'] = USER_db.normalize_token_column(payload['token_name'])
         except ValueError as exc:
+            _log_transfer_failure('unsupported token_name', received_payload)
             return jsonify({'state': 'ERROR', 'msg': str(exc)}), 400
     if 'user_DID' in payload:
         did_rows = get_did_info_db.get_DID_info_by_did(payload['user_DID'])
         if not did_rows:
+            _log_transfer_failure('user_DID not found', received_payload, payload)
             return jsonify({'state': 'ERROR', 'msg': 'user_DID not found'}), 404
         payload['receiver'] = did_rows[0][3]
         payload.setdefault('amount', 1)
@@ -106,6 +146,7 @@ def transfer():
         if token_rows:
             payload['cont_addr'] = token_rows[0][0]
         else:
+            _log_transfer_failure('token contract not found', received_payload, payload)
             return jsonify({
                 'state': 'ERROR',
                 'msg': f"token contract not found: {payload['token_name']}",
@@ -113,10 +154,13 @@ def transfer():
     payload.setdefault('sender', OWNER_ADDR)
     payload.setdefault('sender_pkey', OWNER_PRIVATE)
     status_code, body = post_dchain(TOKEN_ENDPOINTS['transfer'], payload)
+    if status_code != 200 or body.get('state') != 'OK':
+        _log_transfer_failure('DChain token transfer failed', received_payload, payload, status_code, body)
     if status_code == 200 and body.get('state') == 'OK' and payload.get('user_DID') and payload.get('token_name'):
         try:
             updated_column, updated_rows = user_db.increase_balance(payload['user_DID'], payload['token_name'])
         except ValueError as exc:
+            _log_transfer_failure('local user token update failed', received_payload, payload, 400, {'msg': str(exc)})
             return jsonify({'state': 'ERROR', 'msg': str(exc)}), 400
         user_db.commit()
         body.setdefault('local_db', {})['user_token_updated'] = True
