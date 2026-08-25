@@ -1,6 +1,8 @@
-from flask import Blueprint, current_app, jsonify
+from flask import Blueprint, current_app, jsonify, request
+import hmac
 import json
 import os
+from pathlib import Path
 import sys
 
 from myapp.dchain import post_dchain, proxy_response, request_json
@@ -24,12 +26,17 @@ get_user_info_db = USER_db_get.get_User_Info()
 
 
 SENSITIVE_LOG_KEYS = {
+    'holder_pkey',
     'owner_pkey',
     'owner_private',
     'private_key',
     'privatekey',
     'sender_pkey',
 }
+
+DATA_DIR = Path(os.getenv('DID_DATA_DIR') or os.getenv('DATA_DIR', './data'))
+KEYS_DIR = DATA_DIR / 'keys'
+INDEX_PATH = DATA_DIR / 'index.json'
 
 
 def _redact_for_log(value):
@@ -65,6 +72,50 @@ def _with_owner(payload):
     data.setdefault('owner_addr', OWNER_ADDR)
     data.setdefault('owner_pkey', OWNER_PRIVATE)
     return data
+
+
+def _legacy_wallet_private_key(holder):
+    """Loads a locally issued wallet key without returning or logging it."""
+    if not holder:
+        return None
+
+    normalized_holder = str(holder).strip().lower()
+    candidate_paths = []
+    if INDEX_PATH.exists():
+        try:
+            with INDEX_PATH.open('r', encoding='utf-8') as file:
+                index = json.load(file)
+        except (OSError, ValueError):
+            current_app.logger.warning('Unable to read DID wallet index for legacy token reclaim')
+            index = {}
+        for meta in index.values():
+            if str(meta.get('account_address') or '').strip().lower() != normalized_holder:
+                continue
+            fingerprint = meta.get('fingerprint')
+            if fingerprint and str(fingerprint).isalnum():
+                candidate_paths.append(KEYS_DIR / f'{fingerprint}.key.json')
+
+    # Older DID records may predate account_address in index.json. Their wallet key
+    # remains nested in the protected key file, so scan only that private directory.
+    if KEYS_DIR.exists():
+        candidate_paths.extend(KEYS_DIR.glob('*.key.json'))
+
+    visited_paths = set()
+    for key_path in candidate_paths:
+        normalized_path = str(key_path.resolve())
+        if normalized_path in visited_paths:
+            continue
+        visited_paths.add(normalized_path)
+        try:
+            with key_path.open('r', encoding='utf-8') as file:
+                key_data = json.load(file)
+        except (OSError, ValueError):
+            continue
+        wallet = key_data.get('wallet') or {}
+        wallet_address = str(wallet.get('address') or '').strip().lower()
+        if wallet_address == normalized_holder:
+            return wallet.get('privatekey') or wallet.get('private_key')
+    return None
 
 
 def _contract_from_create_response(body):
@@ -184,7 +235,48 @@ def approve():
 @token_api.route('/transfer_from', methods=['POST'])
 @token_api.route('/retrieve', methods=['POST'])
 def transfer_from():
-    return proxy_response(TOKEN_ENDPOINTS['transfer_from'], request_json())
+    payload = request_json()
+    if request.path.endswith('/retrieve'):
+        owner_address_matches = str(payload.get('sender') or '').lower() == str(OWNER_ADDR).lower()
+        receiver_matches = str(payload.get('receiver') or '').lower() == str(OWNER_ADDR).lower()
+        owner_key_matches = hmac.compare_digest(
+            str(payload.get('sender_pkey') or ''),
+            str(OWNER_PRIVATE),
+        )
+        if not owner_address_matches or not receiver_matches or not owner_key_matches:
+            return jsonify({
+                'state': 'ERROR',
+                'msg': 'token owner authentication is required for reclaim',
+            }), 403
+
+        holder_private_key = _legacy_wallet_private_key(payload.get('holder'))
+        if holder_private_key:
+            contract_address = (
+                payload.get('cont_addr')
+                or payload.get('contract_address')
+                or payload.get('contract')
+            )
+            approve_payload = {
+                'cont_addr': contract_address,
+                'holder': payload.get('holder'),
+                'holder_pkey': holder_private_key,
+                'approved': OWNER_ADDR,
+                'amount': payload.get('amount'),
+            }
+            approve_status, approve_body = post_dchain(TOKEN_ENDPOINTS['approve'], approve_payload)
+            if approve_status != 200 or approve_body.get('state') != 'OK':
+                current_app.logger.warning(
+                    'Legacy reward wallet approval failed before reclaim holder=%s',
+                    payload.get('holder'),
+                )
+                return jsonify({
+                    'state': 'ERROR',
+                    'msg': 'legacy reward wallet approval failed before reclaim',
+                    'stage': 'approve',
+                    'rcode': approve_body.get('rcode'),
+                    'cid': approve_body.get('cid'),
+                }), approve_status
+    return proxy_response(TOKEN_ENDPOINTS['transfer_from'], payload)
 
 
 @token_api.route('/tokens', methods=['GET', 'POST'])
