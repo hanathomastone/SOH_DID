@@ -1,6 +1,16 @@
 # SOH_DID Agents Handoff
 
-Last updated: 2026-07-22
+Last updated: 2026-09-17
+
+## Latest Handoff (2026-09-17)
+
+- Ran `git pull origin main`; source was already current at `9f31eee2ca7a4261279074fd46859e0e74b2a73e`.
+- Created `output/pdf/SOH_DID_사전요청자료_작성안.md` and its 8-page PDF, responding to the supplied Korean pre-assessment checklist (items 1-51). Includes code-based architecture, API inventory, transfer/reclaim paths, key handling, parameters, and source references.
+- Organization, production inventory, policies, certifications, incident history, and operational evidence remain explicitly subject to company confirmation. Missing repository evidence is not asserted to be company-wide non-possession. Separate official forms were not provided.
+- Documented current implementation accurately: DID creation returns private keys; DID keys are stored in files and MySQL; DID deletion does not delete DB rows; token user state is set to 1 rather than a numeric balance; retrieve-specific checks do not apply to direct transfer_from. No application behavior was changed.
+- Verification: inspected all three source PDF pages, checked all 51 numbered responses and all 40 route declarations are represented, checked configured sensitive literals are absent from output, and visually reviewed all eight rendered output pages.
+- No production DB/chain calls, transactions, or application tests were run. Existing test import paths can initialize DB connections; isolate those dependencies before future execution.
+- Commit/push this handoff together with the two documents; the delivery commit can be located by subject `docs: draft source-based security assessment responses` (the source baseline remains the hash above).
 
 ## Workspace Rule
 
