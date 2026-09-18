@@ -1,8 +1,20 @@
 # SOH_DID Agents Handoff
 
-Last updated: 2026-09-17
+Last updated: 2026-09-18
 
-## Latest Handoff (2026-09-17)
+## Latest Handoff (2026-09-18)
+
+- Confirmed repository root and clean `main`, then pulled `origin/main` with fast-forward only; already current at `239bcbf` (prior document commit). Application source baseline remains `9f31eee2ca7a4261279074fd46859e0e74b2a73e`.
+- Received the actual seven HWP forms and the three-page pre-assessment request PDF. Created `output/security-forms/2026-09-18_SOH_DID/` and the sibling `SOH_DID_사전요청자료_작성본.zip`.
+- Filled all 51 input rows of the original PDF, all 58 written questions in form 5, and all 24 artifact rows in forms 3 and 4. Produced seven genuine binary HWP files using Hancom HWP export, seven matching native PDFs, an updated technical explanation PDF/Markdown, a 37-page bookmarked combined PDF, and a package guide.
+- Preserved original HWP tables and source files. Form 2's extra forced page break was removed after visual review. Final PDFs have no empty pages; all filled HWP cell values were verified by round-trip XML (423 cells).
+- Organization, contacts, real deployments/addresses, staffing, contracts, approved policies, incidents, access rights and operational evidence remain for company confirmation. Form 3 is a proposed classification, and form 4's `확인 필요` is an explicit temporary status pending a truthful final selection; `일부 제출` means inclusion in the prepared package, not actual external submission.
+- Kept DID signing keys separate from blockchain wallet addresses. Did not infer that all user wallets are service-managed or that default configuration addresses are live inventory. No private keys, API tokens, DB passwords or actual end-user address lists are included; checked sensitive configured literals against generated content.
+- Reviewed every output page using PDF renders and Hancom page images. Reconfirmed the application source behavior documented previously, including private-key exposure, file/DB persistence, token-state semantics and retrieve-only validation. No application behavior changed, application imports/tests run, production DB/chain calls, transactions, email delivery or external assessment submission occurred.
+- Document-generation automation uses Hancom's memory import/export. Native file opening/PDF/image export may show Hancom file-access prompts requiring the user to approve. `SetTextFile` of HWPML must declare UTF-16 for its Unicode string, HWP data uses base64, and `CreatePageImage` page indices are zero-based (this installation emitted BMP).
+- Commit/push this handoff and the output package together; locate the delivery by subject `docs: complete security assessment HWP and PDF forms`.
+
+## Previous Handoff (2026-09-17)
 
 - Ran `git pull origin main`; source was already current at `9f31eee2ca7a4261279074fd46859e0e74b2a73e`.
 - Created `output/pdf/SOH_DID_사전요청자료_작성안.md` and its 8-page PDF, responding to the supplied Korean pre-assessment checklist (items 1-51). Includes code-based architecture, API inventory, transfer/reclaim paths, key handling, parameters, and source references.
